@@ -1,0 +1,296 @@
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+        body {
+            margin: 0px;
+            overflow: hidden;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/88/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/quicksettings/latest/quicksettings.min.js"></script>
+    <script src="https://threejs.org/examples/js/loaders/OBJLoader.js"></script>
+</head>
+
+<body>
+    <div id="container"></div>
+
+    <script id="vertexShader" type="x-shader/x-vertex">
+	uniform float time;
+    uniform vec2 resolution;
+    uniform float modelSize;
+    
+    varying vec3 vertexLocalPosition;
+    varying vec4 vertexWorldPosition;
+    
+    varying vec3 vertexColor;
+    varying vec4 vertexNormal;
+
+	void main()	{
+        vertexColor = color;
+        
+        vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+        gl_Position = projectionMatrix * mvPosition;
+        
+        // Deze waarden moeten alleen even doorgegeven worden aan de fragment shader.
+        vertexNormal = modelViewMatrix * vec4(normal, 0.0);
+        vertexLocalPosition = (position + modelSize) / modelSize / 2.0;
+        vertexWorldPosition = mvPosition;
+	}
+</script>
+
+    <script id="fragmentShader" type="x-shader/x-fragment">
+	uniform float time;
+    uniform vec2 resolution;
+    uniform sampler2D colorRamp;
+    uniform float cameraDistance;
+    uniform float modelSize;
+    uniform float darknessPower;
+    uniform float darknessDistance;
+    uniform float fakeLighting;
+
+    varying vec3 vertexLocalPosition;
+    varying vec4 vertexWorldPosition;
+    varying vec3 vertexColor;
+    varying vec4 vertexNormal;
+
+    vec4 woof(vec4 color, float bands)
+    {
+        color = floor(color * bands + 0.5) / bands;
+        return color;
+    }
+    
+	void main()	{
+        vec4 val = woof(vertexLocalPosition.xxxx, ceil(vertexColor.x * 20.0)) ;
+        
+        vec2 texCoord = vec2(val.x, vertexColor.y );
+        // Laad een kleur uit de color ramp, met automatische interpolatie.
+        vec4 col = texture2D(colorRamp, texCoord);
+
+        // Hoe verder de pixel van de camera af is (grotere Z-coord in world-space)
+        // Hoe donkerder de pixel rendert.
+        float darkness = clamp(darknessPower * (vertexWorldPosition.z + darknessDistance + cameraDistance), 0.0, 1.0);
+        
+        // Hoe veel wijst de normal van het oppervlak omhoog.
+        // Hoe meer het vlak omhoog wijst, (horizontaal is)
+        float upness = dot(vec4(0,1,0,0), vertexNormal);
+
+        gl_FragColor = col * darkness + fakeLighting * upness;
+        
+	}
+</script>
+    <script>
+        const MODEL_SIZE = 1.0;
+
+
+
+        let container;
+        let camera, scene, renderer, clock;
+        let uniforms, material;
+        let mouseX = 0, mouseY = 0,
+            lat = 0, lon = 0, phy = 0, theta = 0;
+
+        let speeds_x = [];
+        let speeds_y = [];
+        let startTime;
+        let settingsPanel;
+        let animationFrameRequestId;
+        let reinitDelayId;
+
+        let loader = new THREE.OBJLoader();
+
+        let models = {
+            'brein_01.obj': null,
+            'brein_02_fake.obj': null,
+        }
+
+        function checkAllLoaded() {
+            for (var modelFile in models) {
+                if (models[modelFile] == null) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+
+        for (let modelFile in models) {
+            console.log("Loading", modelFile);
+            loader.load(
+                modelFile,
+                // OnSuccess Callback
+                (model) => {
+                    console.log("Successfully loaded " + modelFile);
+                    models[modelFile] = model;
+
+                    if (checkAllLoaded()) {
+                        initOnce();
+                    }
+                },
+                (progress) => { },
+                (failure) => { console.log("Model loading failed", modelFile, failure) }
+            )
+        }
+
+        function initOnce() {
+
+            settingsPanel = QuickSettings.create(0, 0, "Settings (h to hide)");
+            settingsPanel.setKey("h");
+            settingsPanel.addRange("Rows", 1, 50, 10, 1);
+            settingsPanel.addRange("Cols", 1, 50, 10, 1);
+            settingsPanel.addRange("Distance", .1, 10, 1.2, 0.1);
+            settingsPanel.addColor("Background", "#FFFFFF");
+            settingsPanel.addRange("Camera Distance", 1, 100, 30, 0.1);
+            settingsPanel.addRange("Darkness Power", 0, 5, 1, 0.1);
+            settingsPanel.addRange("Darkness Distance", -3, 3, 0.7, 0.1);
+            settingsPanel.addRange("Fake Lighting", 0, 1, 0, 0.01);
+
+            settingsPanel.saveInLocalStorage("SETTINGS_STORAGE");
+            settingsPanel.setGlobalChangeHandler(initDelayed);
+
+
+            container = document.getElementById('container');
+
+            var colorRamp = new THREE.TextureLoader().load("color_ramps.png");
+
+            clock = new THREE.Clock();
+
+            camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 1, 3000);
+
+
+            scene = new THREE.Scene();
+            uniforms = {
+                time: { type: "f", value: 1.0 },
+                resolution: { type: "v2", value: new THREE.Vector2() },
+                modelSize: { type: "f", value: 1.0 },
+                colorRamp: { type: "t", value: colorRamp },
+                cameraDistance: { type: "f", value: 10 },
+                darknessPower: { type: "f", value: 1 },
+                darknessDistance: { type: "f", value: 0 },
+                fakeLighting: { type: "f", value: 0 },
+
+            };
+            material = new THREE.ShaderMaterial({
+                uniforms: uniforms,
+                vertexColors: THREE.VertexColors,
+                vertexShader: document.getElementById('vertexShader').textContent,
+                fragmentShader: document.getElementById('fragmentShader').textContent,
+            });
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setClearColor(0xffffff);
+            container.appendChild(renderer.domElement);
+
+            uniforms.modelSize.value = MODEL_SIZE;
+            uniforms.resolution.value.x = window.innerWidth;
+            uniforms.resolution.value.y = window.innerHeight;
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            init();
+        }
+
+        function initDelayed() {
+            // Een beetje vertraging voor "init()" zodat
+            // de UI nog een beetje responsive blijft als je snel
+            // waarden verandert. Anders zou je 100x per seconde init()
+            // aanroepen terwijl je aan een slider beweegt.
+            clearTimeout(reinitDelayId);
+            reinitDelayId = setTimeout(init, 800);
+        }
+
+
+        function init() {
+            if (!checkAllLoaded()) {
+                console.log("Running init before all models loaded");
+                return;
+            }
+            // Clear Scene
+            while (scene.children.length > 0) {
+                scene.remove(scene.children[0]);
+            }
+
+            console.log("Initializing");
+
+            let numRows = settingsPanel.getValue("Rows");
+            let numCols = settingsPanel.getValue("Cols");;
+            let distance = settingsPanel.getValue("Distance");;
+
+            var modelNames = Object.keys(models)
+
+            for (y = 0; y < numRows; y++) {
+                for (x = 0; x < numCols; x++) {
+
+                    var modelName = modelNames[Math.floor(Math.random() * modelNames.length)]
+
+                    // Dit zou nog wel eens mis kunnen gaan als de hierarchy anders is
+                    // in het 3D model. Blender exporteert namelijk een "Group" waarin
+                    // het model als eerste child zit (vandaar children[0]).
+                    // Misschien met een andere export naar .OBJ werkt dit dus niet.
+                    var model = models[modelName].children[0];
+
+                    var geometry = new THREE.Geometry().fromBufferGeometry(model.geometry);
+
+                    var mesh = new THREE.Mesh(geometry, material);
+                    setVertexColors(mesh.geometry, new THREE.Color(Math.random(), Math.random(), 0));
+                    scene.add(mesh);
+                    mesh.position.set((.5 + x - numCols / 2) * distance, (.5 + y - numRows / 2) * distance, 0);
+
+                    speeds_x.push(Math.random() * 5);
+                    speeds_y.push(Math.random() * 5);
+                }
+            }
+
+            uniforms.darknessDistance.value = settingsPanel.getValue("Darkness Distance");
+            uniforms.darknessPower.value = settingsPanel.getValue("Darkness Power");
+            uniforms.fakeLighting.value = settingsPanel.getValue("Fake Lighting");
+
+            camera.position.z = settingsPanel.getValue("Camera Distance");
+            uniforms.cameraDistance.value = settingsPanel.getValue("Camera Distance");
+
+            renderer.setClearColor(settingsPanel.getValue("Background"));
+
+            startTime = Date.now();
+            animate();
+        }
+
+     
+        function animate() {
+            cancelAnimationFrame(animationFrameRequestId);
+            animationFrameRequestId = requestAnimationFrame(animate);
+            render();
+        }
+
+        function render() {
+            var elapsedMilliseconds = Date.now() - startTime;
+            var elapsedSeconds = elapsedMilliseconds / 1000.;
+            uniforms.time.value = 60. * elapsedSeconds;
+
+            var delta = clock.getDelta();
+            for (var i = 0; i < scene.children.length; i++) {
+
+                var object = scene.children[i];
+                object.rotation.y += delta * speeds_y[i] * 0.5 * (i % 2 ? 1 : -1);
+                object.rotation.x += delta * speeds_x[i] * 0.5 * (i % 2 ? -1 : 1);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function setVertexColors(geometry, color) {
+            var faceIndices = ['a', 'b', 'c'];
+            for (var i = 0; i < geometry.faces.length; i++) {
+                f = geometry.faces[i];
+                for (var j = 0; j < 3; j++) {
+                    vertexIndex = f[faceIndices[j]];
+                    p = geometry.vertices[vertexIndex];
+                    f.vertexColors[j] = color;
+                }
+            }
+        }
+        
+    </script>
+</body>
+
+</html>
