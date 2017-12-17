@@ -300,7 +300,7 @@
             // fakkel de analysert aan
             // smoothing 0 - 1: hoeveel smoothing over tijd in de analysert?
             // db thresholds (low, up) -Inf - 0: binnen welk bereik luisteren we (ivm normalisatie)
-            analyser = new AudioAnalyser(time_smoos, lower_threshold_db, upper_threshold_db, boomness_clip);
+            analyser = new AudioAnalyser(time_smoos, lower_threshold_db, upper_threshold_db, boomness_clip, boomness_clip);
             analyser.run()
 
             startTime = Date.now();
@@ -320,16 +320,19 @@
             uniforms.time.value = 60. * elapsedSeconds;
 
             var delta = clock.getDelta();
+            // let step = analyser.get_step();
+
             for (var i = 0; i < scene.children.length; i++) {
+            let boomness = analyser.boomness();
                 var object = scene.children[i];
-                let boomness = analyser.boomness();
 
-                object.rotation.y += (2 + boomness) * delta * speeds_y[i] * 0.5 * (i % 2 ? 1 : -1);
-                object.rotation.x += (2 + boomness) * delta * speeds_x[i] * 0.5 * (i % 2 ? -1 : 1);
-
-                camera.position.z = original_camera_z * (1 - boomness / 2);
+                object.rotation.y += (1 + boomness) * delta * speeds_y[i] * 0.5 * (i % 2 ? 1 : -1);
+                object.rotation.x += (1 + boomness) * delta * speeds_x[i] * 0.5 * (i % 2 ? -1 : 1);
+            camera.position.z = original_camera_z * (1 - boomness / 2);
             }
 
+
+            // camera.rotation.set(0, 0, Math.sin(step/180)/2);
             renderer.render(scene, camera);
         }
 
