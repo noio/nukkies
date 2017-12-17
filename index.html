@@ -8,11 +8,18 @@
             margin: 0px;
             overflow: hidden;
         }
+
+        .speck {
+            width: 100%;
+            background: black;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/88/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/quicksettings/latest/quicksettings.min.js"></script>
     <script src="https://threejs.org/examples/js/loaders/OBJLoader.js"></script>
-    <script src="audio.js"></script>
+    
+    <script src="audio_analyser.js"></script>
+    <script src="spectrum_drawer.js"></script>
 </head>
 
 <body>
@@ -90,7 +97,10 @@
         let time_smoos;
         let lower_threshold_db;
         let upper_threshold_db;
-        let boomness_clip;
+        let sigmoid_center;
+        let sigmoid_steepness;
+        let filter_freq;
+        let speck_el;
 
         let original_camera_z;
 
@@ -185,7 +195,14 @@
             settingsPanel.addRange("Audio smoos", 0, 1, 0.5, 0.01);
             settingsPanel.addRange("DB Threshold min.", -150, -50, -100, 1);
             settingsPanel.addRange("DB Threshold max.", -50, 0, -30, 1);
-            settingsPanel.addRange("Boomness clip", 0, 1, 0.5, 0.01);
+            settingsPanel.addRange("Filter freq", 0, 5000, 300, 1);
+            settingsPanel.addRange("Sigmoid center", 0, 1, 0.5, 0.01);
+            settingsPanel.addRange("Sigmoid steepness", -20, 0, -10, 0.1);
+
+            speck_el = document.createElement("canvas");
+            speck_el.className = 'speck';
+
+            settingsPanel.addElement("Spectrum", speck_el);
 
             settingsPanel.saveInLocalStorage("SETTINGS_STORAGE");
             settingsPanel.setGlobalChangeHandler(initDelayed);
@@ -227,6 +244,19 @@
             uniforms.resolution.value.x = window.innerWidth;
             uniforms.resolution.value.y = window.innerHeight;
             renderer.setSize(window.innerWidth, window.innerHeight);
+
+            // fakkel de analysert aan
+            // smoothing 0 - 1: hoeveel smoothing over tijd in de analysert?
+            // db thresholds (low, up) -Inf - 0: binnen welk bereik luisteren we (ivm normalisatie)
+            time_smoos = settingsPanel.getValue("Audio smoos");
+            lower_threshold_db = settingsPanel.getValue("DB Threshold min.");
+            upper_threshold_db = settingsPanel.getValue("DB Threshold max.");
+            filter_freq = settingsPanel.getValue("Filter freq", 0, 5000, 300, 1);
+            sigmoid_center = settingsPanel.getValue("Sigmoid center", 0, 1, 0.5, 0.01);
+            sigmoid_steepness = settingsPanel.getValue("Sigmoid steepness", -20, 0, -10, 0.1);
+
+            analyser = new AudioAnalyser(time_smoos, lower_threshold_db, upper_threshold_db, filter_freq, sigmoid_center, sigmoid_steepness);
+            analyser.run()
 
             init();
         }
@@ -293,15 +323,16 @@
             time_smoos = settingsPanel.getValue("Audio smoos");
             lower_threshold_db = settingsPanel.getValue("DB Threshold min.");
             upper_threshold_db = settingsPanel.getValue("DB Threshold max.");
-            boomness_clip = settingsPanel.getValue("Boomness clip");
+            filter_freq = settingsPanel.getValue("Filter freq");
+            sigmoid_steepness = settingsPanel.getValue("Sigmoid steepness");
+            sigmoid_center = settingsPanel.getValue("Sigmoid center");
 
             renderer.setClearColor(settingsPanel.getValue("Background"));
 
-            // fakkel de analysert aan
-            // smoothing 0 - 1: hoeveel smoothing over tijd in de analysert?
-            // db thresholds (low, up) -Inf - 0: binnen welk bereik luisteren we (ivm normalisatie)
-            analyser = new AudioAnalyser(time_smoos, lower_threshold_db, upper_threshold_db, boomness_clip, boomness_clip);
-            analyser.run()
+            analyser.update_params(time_smoos, lower_threshold_db, upper_threshold_db, filter_freq, sigmoid_center, sigmoid_steepness);
+
+            let speck_drawer = new SpectrumDrawer(speck_el, analyser);
+            speck_drawer.draw();
 
             startTime = Date.now();
             animate();
@@ -309,7 +340,7 @@
 
      
         function animate() {
-            // cancelAnimationFrame(animationFrameRequestId);
+            cancelAnimationFrame(animationFrameRequestId);
             animationFrameRequestId = requestAnimationFrame(animate);
             render();
         }
@@ -320,19 +351,19 @@
             uniforms.time.value = 60. * elapsedSeconds;
 
             var delta = clock.getDelta();
-            // let step = analyser.get_step();
+            let step = analyser.get_step();
 
-            for (var i = 0; i < scene.children.length; i++) {
             let boomness = analyser.boomness();
+            for (var i = 0; i < scene.children.length; i++) {
                 var object = scene.children[i];
 
                 object.rotation.y += (1 + boomness) * delta * speeds_y[i] * 0.5 * (i % 2 ? 1 : -1);
                 object.rotation.x += (1 + boomness) * delta * speeds_x[i] * 0.5 * (i % 2 ? -1 : 1);
-            camera.position.z = original_camera_z * (1 - boomness / 2);
+                camera.position.z = original_camera_z * (1 - boomness / 4);
             }
 
 
-            // camera.rotation.set(0, 0, Math.sin(step/180)/2);
+            camera.rotation.set(0, 0, Math.sin(step / 360));
             renderer.render(scene, camera);
         }
 
