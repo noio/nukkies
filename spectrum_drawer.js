@@ -2,7 +2,7 @@ class SpectrumDrawer {
     constructor(element, audio_analyser) {
         this.element = element;
         this.context_2d = element.getContext("2d");
-        this.context_2d.strokeStyle = '#ff0000';
+        this.context_2d.strokeStyle = "#ff0000";
         this.audio_analyser = audio_analyser;
     }
 
