@@ -12,6 +12,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/88/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/quicksettings/latest/quicksettings.min.js"></script>
     <script src="https://threejs.org/examples/js/loaders/OBJLoader.js"></script>
+    <script src="audio.js"></script>
 </head>
 
 <body>
@@ -85,6 +86,13 @@
         const MODEL_SIZE = 1.0;
 
 
+        let analyser;
+        let time_smoos;
+        let lower_threshold_db;
+        let upper_threshold_db;
+        let boomness_clip;
+
+        let original_camera_z;
 
         let container;
         let camera, scene, renderer, clock;
@@ -174,6 +182,10 @@
             settingsPanel.addRange("Darkness Power", 0, 5, 1, 0.1);
             settingsPanel.addRange("Darkness Distance", -3, 3, 0.7, 0.1);
             settingsPanel.addRange("Fake Lighting", 0, 1, 0, 0.01);
+            settingsPanel.addRange("Audio smoos", 0, 1, 0.5, 0.01);
+            settingsPanel.addRange("DB Threshold min.", -150, -50, -100, 1);
+            settingsPanel.addRange("DB Threshold max.", -50, 0, -30, 1);
+            settingsPanel.addRange("Boomness clip", 0, 1, 0.5, 0.01);
 
             settingsPanel.saveInLocalStorage("SETTINGS_STORAGE");
             settingsPanel.setGlobalChangeHandler(initDelayed);
@@ -276,8 +288,20 @@
 
             camera.position.z = settingsPanel.getValue("Camera Distance");
             uniforms.cameraDistance.value = settingsPanel.getValue("Camera Distance");
+            original_camera_z = settingsPanel.getValue("Camera Distance");
+
+            time_smoos = settingsPanel.getValue("Audio smoos");
+            lower_threshold_db = settingsPanel.getValue("DB Threshold min.");
+            upper_threshold_db = settingsPanel.getValue("DB Threshold max.");
+            boomness_clip = settingsPanel.getValue("Boomness clip");
 
             renderer.setClearColor(settingsPanel.getValue("Background"));
+
+            // fakkel de analysert aan
+            // smoothing 0 - 1: hoeveel smoothing over tijd in de analysert?
+            // db thresholds (low, up) -Inf - 0: binnen welk bereik luisteren we (ivm normalisatie)
+            analyser = new AudioAnalyser(time_smoos, lower_threshold_db, upper_threshold_db, boomness_clip);
+            analyser.run()
 
             startTime = Date.now();
             animate();
@@ -285,7 +309,7 @@
 
      
         function animate() {
-            cancelAnimationFrame(animationFrameRequestId);
+            // cancelAnimationFrame(animationFrameRequestId);
             animationFrameRequestId = requestAnimationFrame(animate);
             render();
         }
@@ -297,10 +321,13 @@
 
             var delta = clock.getDelta();
             for (var i = 0; i < scene.children.length; i++) {
-
                 var object = scene.children[i];
-                object.rotation.y += delta * speeds_y[i] * 0.5 * (i % 2 ? 1 : -1);
-                object.rotation.x += delta * speeds_x[i] * 0.5 * (i % 2 ? -1 : 1);
+                let boomness = analyser.boomness();
+
+                object.rotation.y += (2 + boomness) * delta * speeds_y[i] * 0.5 * (i % 2 ? 1 : -1);
+                object.rotation.x += (2 + boomness) * delta * speeds_x[i] * 0.5 * (i % 2 ? -1 : 1);
+
+                camera.position.z = original_camera_z * (1 - boomness / 2);
             }
 
             renderer.render(scene, camera);
